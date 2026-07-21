@@ -4,8 +4,8 @@ ARG HUMHUB_VERSION
 ARG VCS_REF
 
 
-RUN set -o pipefail; \
-    apt-get update && apt-get install -y --no-install-recommends \
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     ca-certificates \
     curl \

@@ -1,13 +1,14 @@
 # Alpine-based PHP-FPM and NGINX HumHub docker-container
 
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/55c4b00f6fb842fa86433ac5ade82fc7)](https://app.codacy.com/gh/jvies/humhub-docker/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
- [![Build](https://github.com/jvies/humhub-docker/actions/workflows/build.yml/badge.svg)](https://github.com/jvies/humhub-docker/actions/workflows/build.yml) ![Docker Pulls](https://img.shields.io/docker/pulls/jeremyvies/humhub)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/923e9ab02e164e7884fe10d75523472c)](https://app.codacy.com/gh/jvies/humhub-docker-frankenphp/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+ [![Build](https://github.com/jvies/humhub-docker-frankenphp/actions/workflows/build.yml/badge.svg)](https://github.com/jvies/humhub-docker-frankenphp/actions/workflows/build.yml) ![Docker Pulls](https://img.shields.io/docker/pulls/jeremyvies/humhub-frankenphp)
 
 [HumHub](https://github.com/humhub/humhub) is a feature rich and highly flexible OpenSource Social Network Kit written in PHP.
 This container provides a quick, flexible and lightweight way to set up a proof-of-concept for detailed evaluation.
 Using this in production is possible, but please note that there is currently no official support available for this kind of setup.
 
-This repository is a fork and continuation of [humhub-docker from Michael Riedmann](https://github.com/mriedmann/humhub-docker).
+This repository is a fork and continuation of [humhub-docker from Michael Riedmann](https://github.com/mriedmann/humhub-docker) using [FrankenPHP](https://frankenphp.dev/).
+It uses the same configuration variables (HUMHUB_xxx).
 
 ## Versions
 

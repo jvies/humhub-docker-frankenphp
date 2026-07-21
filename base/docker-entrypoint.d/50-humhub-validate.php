@@ -1,4 +1,5 @@
 <?php
+
 /**
  * HumHub Integrity Check Hook
  * Replaces 50-validate-humhub.sh for Distroless / Pure PHP execution.

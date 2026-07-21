@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 jobs:
-  build_bases:
+  build:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
@@ -25,22 +25,18 @@ jobs:
           --build-arg HUMHUB_VERSION="${HUMHUB_VERSION}" \
           --build-arg VCS_REF="$(git rev-parse --short HEAD)" \
           --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-          --target base \
-          -t "ghcr.io/${{ github.repository_owner }}/humhub:temp-${{ github.run_id }}-${HUMHUB_VERSION}-base" \
+          --target runner \
+          -t "ghcr.io/${{ github.repository_owner }}/humhub-frankenphp:temp-${{ github.run_id }}-${HUMHUB_VERSION}" \
           .
-        docker save "ghcr.io/${{ github.repository_owner }}/humhub:temp-${{ github.run_id }}-${HUMHUB_VERSION}-base" | gzip > "build-${HUMHUB_VERSION}.tar.gz"
+        docker save "ghcr.io/${{ github.repository_owner }}/humhub-frankenphp:temp-${{ github.run_id }}-${HUMHUB_VERSION}" | gzip > "build-${HUMHUB_VERSION}.tar.gz"
     - name: Upload image archive
       uses: actions/upload-artifact@v7
       with:
         name: build-${{ env.HUMHUB_VERSION }}
         path: build-${{ env.HUMHUB_VERSION }}.tar.gz
-  build_variants:
-    needs: build_bases
+  test:
+    needs: build
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: ["allinone", "nginx", "phponly"]
     steps:
     - uses: actions/checkout@v7
     - name: Set Humhub version
@@ -52,40 +48,11 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         name: build-${{ env.HUMHUB_VERSION }}
-    - name: Build and push docker image
-      run: |
-        docker load --input "build-${HUMHUB_VERSION}.tar.gz"
-        docker build \
-          --build-arg HUMHUB_VERSION="${HUMHUB_VERSION}" \
-          --build-arg VCS_REF="$(git rev-parse --short HEAD)" \
-          --target "humhub_${{ matrix.target }}" \
-          -t "ghcr.io/${{ github.repository_owner }}/humhub:temp-${{ github.run_id }}-${HUMHUB_VERSION}-${{ matrix.target }}" \
-          .
-        docker save "ghcr.io/${{ github.repository_owner }}/humhub:temp-${{ github.run_id }}-${HUMHUB_VERSION}-${{ matrix.target }}" | gzip > "build-${HUMHUB_VERSION}-${{ matrix.target }}.tar.gz"
-    - name: Upload image archive
-      uses: actions/upload-artifact@v7
-      with:
-        name: build-${{ env.HUMHUB_VERSION }}-${{ matrix.target }}
-        path: build-${{ env.HUMHUB_VERSION }}-${{ matrix.target }}.tar.gz
-  test_aio:
-    needs: build_variants
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v7
-    - name: Set Humhub version
-      run: |
-        HUMHUB_VERSION=$(cat versions.txt)
-        export HUMHUB_VERSION
-        echo "HUMHUB_VERSION=$HUMHUB_VERSION" >> "$GITHUB_ENV"
-    - name: Download image archive
-      uses: actions/download-artifact@v8
-      with:
-        name: build-${{ env.HUMHUB_VERSION }}-allinone
     - name: Load images
       run: |
-        docker load --input "build-${HUMHUB_VERSION}-allinone.tar.gz"
+        docker load --input "build-${HUMHUB_VERSION}.tar.gz"
     - name: replace image
-      run: sed -i "s/docker.io\/${{ github.repository_owner }}\/humhub:latest/ghcr.io\/${{ github.repository_owner }}\/humhub:temp-${{ github.run_id }}-${HUMHUB_VERSION}-allinone/g" docker-compose.yml
+      run: sed -i "s/docker.io\/jeremyvies\/humhub-frankenphp:latest/ghcr.io\/${{ github.repository_owner }}\/humhub-frankenphp:temp-${{ github.run_id }}-${HUMHUB_VERSION}/g" docker-compose.yml
     - name: Spin up services
       run: docker compose -f docker-compose.yml up -d
     - name: Wait
@@ -97,59 +64,16 @@ jobs:
     - name: Test
       run: curl http://localhost:8080/ -L --fail && curl http://localhost:8080/ -L --fail -s | grep 'Sign in</button>' -q
     - name: Test Email
-      run: docker compose exec -T humhub php /var/www/localhost/htdocs/protected/yii test/email 'test@example.com' | grep 'Message successfully sent!' -q
+      run: docker compose exec -T humhub /usr/local/bin/frankenphp php-cli /app/public/protected/yii test/email 'test@example.com' | grep 'Message successfully sent!' -q
     - name: Cleanup
       if: always()
       run: docker compose -f docker-compose.yml down -v
-  test_prod:
-    needs: build_variants
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v7
-    - name: Set Humhub version
-      run: |
-        HUMHUB_VERSION=$(cat versions.txt)
-        export HUMHUB_VERSION
-        echo "HUMHUB_VERSION=$HUMHUB_VERSION" >> "$GITHUB_ENV"
-    - name: Download image archive (phponly)
-      uses: actions/download-artifact@v8
-      with:
-        name: build-${{ env.HUMHUB_VERSION }}-phponly
-    - name: Download image archive (nginx)
-      uses: actions/download-artifact@v8
-      with:
-        name: build-${{ env.HUMHUB_VERSION }}-nginx
-    - name: Load images
-      run: |
-        docker load --input "build-${HUMHUB_VERSION}-phponly.tar.gz"
-        docker load --input "build-${HUMHUB_VERSION}-nginx.tar.gz"
-    - name: replace image
-      run: |
-        sed -i "s/docker.io\/${DOCKER_IO_USER:-${{ github.repository_owner }}}\/humhub:stable-nginx/ghcr.io\/${{ github.repository_owner }}\/humhub:temp-${{ github.run_id }}-${HUMHUB_VERSION}-nginx/g" docker-compose.prod.yml
-        sed -i "s/docker.io\/${DOCKER_IO_USER:-${{ github.repository_owner }}}\/humhub:stable-phponly/ghcr.io\/${{ github.repository_owner }}\/humhub:temp-${{ github.run_id }}-${HUMHUB_VERSION}-phponly/g" docker-compose.prod.yml
-    - name: Spin up services
-      run: docker compose -f docker-compose.prod.yml up -d
-    - name: Wait
-      run: sleep 60
-    - name: Check status
-      run: docker ps -a
-    - name: Logs
-      run: docker compose logs
-    - name: Test
-      run: curl http://localhost:8080/ -L --fail && curl http://localhost:8080/ -L --fail -s | grep 'Sign in</button>' -q
-    - name: Test Email
-      run: docker compose exec -T humhub php /var/www/localhost/htdocs/protected/yii test/email 'test@example.com' | grep 'Message successfully sent!' -q
-    - name: Cleanup
-      if: always()
-      run: docker compose -f docker-compose.prod.yml down -v
   push_ghcr:
-    needs: ["test_aio", "test_prod"]
+    needs: ["test"]
     runs-on: ubuntu-latest
     if: ${{ github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
-      matrix:
-        target: ["allinone", "nginx", "phponly"]
     steps:
     - uses: actions/checkout@v7
     - name: Login to registry
@@ -166,10 +90,10 @@ jobs:
     - name: Download image archive
       uses: actions/download-artifact@v8
       with:
-        name: build-${{ env.HUMHUB_VERSION }}-${{ matrix.target }}
+        name: build-${{ env.HUMHUB_VERSION }}
     - name: Load, retag and Push images
       run: |
-        docker load --input "build-${HUMHUB_VERSION}-${{ matrix.target }}.tar.gz"
-        docker tag "ghcr.io/${{ github.repository_owner }}/humhub:temp-${{ github.run_id }}-${HUMHUB_VERSION}-${{ matrix.target }}" "ghcr.io/${{ github.repository_owner }}/humhub-${{ matrix.target }}:${HUMHUB_VERSION}"
-        docker push "ghcr.io/${{ github.repository_owner }}/humhub-${{ matrix.target }}:${HUMHUB_VERSION}"
+        docker load --input "build-${HUMHUB_VERSION}-frankenphp.tar.gz"
+        docker tag "ghcr.io/${{ github.repository_owner }}/humhub-frankenphp:temp-${{ github.run_id }}-${HUMHUB_VERSION}" "ghcr.io/${{ github.repository_owner }}/humhub-frankenphp:${HUMHUB_VERSION}"
+        docker push "ghcr.io/${{ github.repository_owner }}/humhub-frankenphp:${HUMHUB_VERSION}"
 
