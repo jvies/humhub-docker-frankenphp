@@ -7,6 +7,10 @@
 
 declare(strict_types=1);
 
+include_once(__DIR__ . '/private/logs.php');
+include_once(__DIR__ . '/private/recursivecopy.php');
+include_once(__DIR__ . '/private/runyii.php');
+
 // =====================================================================
 // 1. DEFAULT VALUES CONFIGURATION (Mirroring docker-entrypoint.sh)
 // =====================================================================
@@ -85,86 +89,10 @@ foreach ($envDefaults as $key => $defaultValue) {
 }
 
 // =====================================================================
-// 2. HELPER FUNCTIONS & LOGGING
+// 2. LOGGING SETTINGS
 // =====================================================================
 
 $quietLogs = !empty(getenv('ENTRYPOINT_QUIET_LOGS'));
-
-function logMessage(string $message): void
-{
-    global $quietLogs;
-    if (!$quietLogs) {
-        fwrite(STDOUT, "[entrypoint.php] " . $message . PHP_EOL);
-    }
-}
-
-/**
- * Executes a Yii console command by memory-forking and directly including the framework launcher.
- * This completely avoids executing sub-processes via shell layers, keeping it 100% Distroless compatible.
- */
-function runYii(array $args, string $workingDir = '/app/public/protected'): int
-{
-    $escapedArgs = implode(' ', array_map('escapeshellarg', $args));
-    logMessage("Invoking internal Yii console layer: yii " . $escapedArgs);
-
-    // Ensure the pcntl extension is present for in-memory isolation
-    if (!function_exists('pcntl_fork')) {
-        fwrite(STDERR, "[ERROR] pcntl extension is required to execute inline framework tasks in Distroless." . PHP_EOL);
-        exit(1);
-    }
-
-    $pid = pcntl_fork();
-
-    if ($pid === -1) {
-        fwrite(STDERR, "[ERROR] Could not fork memory for Yii internal command execution." . PHP_EOL);
-        return 1;
-    } elseif ($pid === 0) {
-        // --- CHILD PROCESS ---
-        // 1. Prepare environment and working directory
-        $oldCwd = getcwd();
-        chdir($workingDir);
-
-        // 2. Mock the global $argv that Yii depends on
-        // $argv[0] is always the script name, followed by commands and flags
-        global $argv;
-        $argv = array_merge([$workingDir . '/yii'], $args);
-        $_SERVER['argv'] = $argv;
-
-        // 3. Prevent HumHub / Yii from polluting output or capturing loops incorrectly if needed
-        // Execute the native entry script directly in this process memory
-        try {
-            require $workingDir . '/yii';
-            exit(0); // If the script didn't call exit internally, we exit cleanly
-        } catch (\Throwable $e) {
-            fwrite(STDERR, "[Yii Internal Error] " . $e->getMessage() . PHP_EOL);
-            exit(1);
-        }
-    } else {
-        // --- PARENT PROCESS ---
-        // Wait for this specific inline task to finish execution before proceeding to next entries
-        pcntl_waitpid($pid, $status);
-
-        // Return the exact exit code provided by Yii (0 = success, >0 = failure)
-        return pcntl_wexitstatus($status);
-    }
-}
-
-function recursiveCopy(string $src, string $dst): void
-{
-    $dir = opendir($src);
-    @mkdir($dst, 0755, true);
-    while (($file = readdir($dir)) !== false) {
-        if ($file === '.' || $file === '..') {
-            continue;
-        }
-        if (is_dir($src . '/' . $file)) {
-            recursiveCopy($src . '/' . $file, $dst . '/' . $file);
-        } else {
-            copy($src . '/' . $file, $dst . '/' . $file);
-        }
-    }
-    closedir($dir);
-}
 
 logMessage("Starting pre-launch configuration...");
 
