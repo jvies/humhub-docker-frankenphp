@@ -12,7 +12,7 @@ It uses the same configuration variables (HUMHUB_xxx).
 
 ## Versions
 
-This project provides different images and tags for different purposes, each one maintained on a different branch. For evaluation use `humhub:stable`, for production consider using the newest minor-version tag (e.g. `humhub:1.15`).
+This project provides different images and tags for different purposes, each one maintained on a different branch. For evaluation use `humhub-frankenphp:stable`, for production consider using the newest minor-version tag (e.g. `humhub-frankenphp:1.15`).
 
 - `latest` : unstable master build (not recommended for production; use with caution, might be unstable!)
 - Minor (e.g `1.15`): Always points to the latest release of given minor version. (Recommended)
@@ -20,22 +20,12 @@ This project provides different images and tags for different purposes, each one
 - `stable`: Always points to oldest, still supported, therefore most mature version. Updates include minor-version changes which can include db-schema changes (higher risk).
 - `legacy`: Try to avoid this tag as much as possible. If your current installation is flagged as "deprecated" the related tag is also changed to "legacy". Please try to upgrade as fast as possible to avoid security and other issues.
 
-### Variants
-
-There are 3 different variants of this image. Use the unspecific tag (e.g. `humhub:1.15`) if you what a running installation as fast as possible. Use the moving tags if you want to stay up-to-date, not caring about version-upgrades. For critical environments we recommend that you stick to the version-tags or digest, not using moving tags.
-
-If plan to build some kind of hosted solution, have a look at `docker-compose.prod.yml` to understand how the variant images can be used.
-
-- **all-in-one** (e.g. `humhub:1.15`): Multi-service image (nginx + php-fpm). Use this if you are not sure what you need.
-- **nginx** (e.g. `humhub:1.15-nginx`): Only static files and nginx proxy config without php.
-- **phponly** (e.g. `humhub:1.15-phponly`): HumHub sources bundled with php-fpm. Needs a fcgi application-server to be able to deliver http.
-
 ## Quickstart
 
 No database integrated. For persistency look at the Compose-File example.
 
 1. `docker run -d --name humhub_db -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=humhub mariadb:10.2`
-2. `docker run -d --name humhub -p 80:80 --link humhub_db:db jeremyvies/humhub:stable`
+2. `docker run -d --name humhub -p 80:80 --link humhub_db:db jeremyvies/humhub-frankenphp:stable`
 3. open <http://localhost/> in browser
 4. complete the installation wizard (use `db` as database hostname and `humhub` as database name)
 5. finished
@@ -46,7 +36,7 @@ No database integrated. For persistency look at the Compose-File example.
 version: '3.1'
 services:
   humhub:
-    image: mriedmann/humhub:stable
+    image: jeremyvies/humhub-frankenphp:stable
     links:
       - "db:db"
     ports:
@@ -83,7 +73,7 @@ volumes:
 
 ## Advanced Config
 
-This container supports some further options which can be configured via environment variables. Look at the [docker-compose.yml](https://github.com/jvies/humhub-docker/blob/master/docker-compose.yml) for some inspiration.
+This container supports some further options which can be configured via environment variables. Look at the [docker-compose.yml](https://github.com/jvies/humhub-docker-frankenphp/blob/master/docker-compose.yml) for some inspiration.
 
 ### Database Config
 
@@ -197,17 +187,27 @@ PHP_MEMORY_LIMIT        [1G]
 PHP_TIMEZONE            [UTC]
 ```
 
-### NGINX Config
+### Caddy Config
 
-Following variables can be used to configure the embedded Nginx. The config-file gets rewritten on every container startup and is not persisted. Avoid changing it by hand.
+FrankenPHP is based on [Caddy](https://caddyserver.com/).
 
 ```plaintext
-NGINX_CLIENT_MAX_BODY_SIZE [10m]
-NGINX_KEEPALIVE_TIMEOUT    [65]
-HUMHUB_REVERSEPROXY_WHITELIST ["127.0.0.1"]
+FRANKENPHP_NUM_THREADS [5]
+FRANKENPHP_MAX_THREADS [10]
+HTTP_PORT [8080]
+HUMHUB_REVERSEPROXY_WHITELIST ["private_ranges"]
 ```
 
 `HUMHUB_REVERSEPROXY_WHITELIST` allows access to the `/ping` endpoint for the given IP-Address. CIDR notation is supported.
+
+### Cron tasks
+
+This FrankenPHP image does not embed a cron. The task has to be called externally.
+
+```plaintext
+docker compose exec humhub /usr/local/bin/frankenphp php-cli /app/public/protected/yii cron/run
+docker compose exec humhub /usr/local/bin/frankenphp php-cli /app/public/protected/yii queue/run
+```
 
 ## Contribution
 
@@ -217,14 +217,10 @@ Please use the issues-page for bugs or suggestions. Pull-requests are highly wel
 
 Special thanks go to following contributors for there incredible work on this image:
 
-- [@jvies](https://github.com/jvies)
+- [@mriedmann](https://github.com/mriedmann)
 - [@madmath03](https://github.com/madmath03)
 - [@ArchBlood](https://github.com/ArchBlood)
 - [@pascalberger](https://github.com/pascalberger)
 - [@bkmeneguello](https://github.com/bkmeneguello)
 
 And also to @luke- and his team for providing, building and maintaining HumHub.
-
-## For FrankenPHP cron task
-docker compose exec humhub /usr/local/bin/frankenphp php-cli /app/public/protected/yii cron/run
-docker compose exec humhub /usr/local/bin/frankenphp php-cli /app/public/protected/yii queue/run
