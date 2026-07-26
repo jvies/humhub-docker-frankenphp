@@ -1,0 +1,30 @@
+{
+	auto_https off
+
+	# enable FrankenPHP mode globally
+	frankenphp {
+		num_threads {$FRANKENPHP_NUM_THREADS:5}
+		max_threads {$FRANKENPHP_MAX_THREADS:10}
+	}
+
+	servers :{$HTTP_PORT:8080} {
+		name frankenphp
+
+		protocols h1
+	}
+}
+
+:{$HTTP_PORT:8080} {
+	# root directory of humhub
+	root * /app/public
+
+	# enable compression of responses
+	encode zstd gzip
+
+	# Restrict to HUMHUB_REVERSEPROXY_WHITELIST
+	@blocked not remote_ip {$HUMHUB_REVERSEPROXY_WHITELIST:private_ranges}
+	abort @blocked
+
+	# start the app via FrankenPHP
+	php_server
+}

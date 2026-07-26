@@ -1,87 +1,74 @@
+FROM dunglas/frankenphp:php8.5 AS builder
+
 ARG HUMHUB_VERSION
 ARG VCS_REF
-ARG BUILD_DEPS="\
-    ca-certificates \
-    nodejs \
-    npm \
-    php85 \
-    php85-ctype \
-    php85-curl \
-    php85-dom \
-    php85-exif \
-    php85-fileinfo \
-    php85-gd \
-    php85-iconv \
-    php85-intl \
-    php85-json \
-    php85-ldap \
-    php85-mbstring \
-    php85-openssl \
-    php85-pdo_mysql \
-    php85-phar \
-    php85-simplexml \
-    php85-sodium \
-    php85-tokenizer \
-    php85-xml \
-    php85-xmlreader \
-    php85-xmlwriter \
-    php85-zip \
-    composer \
-    tzdata \
-    "
 
-ARG RUNTIME_DEPS="\
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    acl \
     ca-certificates \
     curl \
-    imagemagick \
-    libintl \
-    php85 \
-    php85-apcu \
-    php85-bcmath \
-    php85-ctype \
-    php85-curl \
-    php85-dom \
-    php85-exif \
-    php85-fileinfo \
-    php85-fpm \
-    php85-gd \
-    php85-gmp \
-    php85-iconv \
-    php85-intl \
-    php85-json \
-    php85-ldap \
-    php85-mbstring \
-    php85-openssl \
-    php85-pdo_mysql \
-    php85-pecl-imagick \
-    php85-phar \
-    php85-session \
-    php85-simplexml \
-    php85-sodium \
-    php85-sqlite3 \
-    php85-xml \
-    php85-xmlreader \
-    php85-xmlwriter \
-    php85-zip \
-    sqlite \
-    supervisor \
+    file \
+    git \
+    libtree \
+    nodejs \
+    npm \
     tzdata \
-    "
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
 
-FROM docker.io/library/alpine:3.24.1 AS builder
+RUN set -eux; \
+    EXPECTED_CHECKSUM="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");')" && \
+    php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" && \
+    ACTUAL_CHECKSUM="$(php -r "echo hash_file('sha384', 'composer-setup.php');")" && \
+    if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then \
+        >&2 echo 'ERROR: Invalid installer checksum'; \
+        rm composer-setup.php; \
+        exit 1; \
+    fi && \
+    php composer-setup.php --install-dir=/usr/local/bin --filename=composer && \
+    rm composer-setup.php
 
-ARG HUMHUB_VERSION
-ARG BUILD_DEPS
+RUN install-php-extensions \
+    apcu \
+    bcmath \
+    exif \
+    gd \
+    gmp \
+    imagick \
+    intl \
+    ldap \
+    opcache \
+    pcntl \
+    pdo_mysql \
+    pdo_sqlite \
+    zip
 
-RUN apk add --no-cache --update $BUILD_DEPS && \
-    rm -rf /var/cache/apk/*
+ENV PHP_POST_MAX_SIZE=16M \
+    PHP_UPLOAD_MAX_FILESIZE=10M \
+    PHP_MAX_EXECUTION_TIME=60 \
+    PHP_MEMORY_LIMIT=1G \
+    PHP_TIMEZONE=UTC
+
+RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini" && \
+    echo "post_max_size = ${PHP_POST_MAX_SIZE}" >> "$PHP_INI_DIR/conf.d/humhub.ini" && \
+    echo "upload_max_filesize = ${PHP_UPLOAD_MAX_FILESIZE}" >> "$PHP_INI_DIR/conf.d/humhub.ini" && \
+    echo "max_execution_time = ${PHP_MAX_EXECUTION_TIME}" >> "$PHP_INI_DIR/conf.d/humhub.ini" && \
+    echo "memory_limit = ${PHP_MEMORY_LIMIT}" >> "$PHP_INI_DIR/conf.d/humhub.ini" && \
+    echo "date.timezone = ${PHP_TIMEZONE}" >> "$PHP_INI_DIR/conf.d/humhub.ini"
+
+# JVI: for debug
+RUN echo "display_errors = On" >> "$PHP_INI_DIR/conf.d/humhub.ini" && \
+    echo "display_startup_errors = On" >> "$PHP_INI_DIR/conf.d/humhub.ini" && \
+    echo "error_reporting = E_ALL" >> "$PHP_INI_DIR/conf.d/humhub.ini"
 
 WORKDIR /usr/src/
 ADD https://github.com/humhub/humhub/archive/v${HUMHUB_VERSION}.tar.gz /usr/src/
 RUN tar xzf v${HUMHUB_VERSION}.tar.gz && \
     mv humhub-${HUMHUB_VERSION} humhub && \
     rm v${HUMHUB_VERSION}.tar.gz
-    
+
 WORKDIR /usr/src/humhub
 
 RUN composer config --no-plugins allow-plugins.yiisoft/yii2-composer true && \
@@ -91,13 +78,42 @@ RUN composer config --no-plugins allow-plugins.yiisoft/yii2-composer true && \
     npm install grunt && \
     npm install -g grunt-cli && \
     grunt build-assets && \
-    rm -rf ./node_modules
+    rm -rf ./node_modules && \
+    rm -f protected/config/common.php && \
+    echo "v${HUMHUB_VERSION}" > .version
 
-FROM docker.io/library/alpine:3.24.1 AS base
+# Prepare distroless bundle
+WORKDIR /
+RUN mkdir -p /dist/usr/lib /dist/usr/local/bin /dist/usr/local/lib /dist/usr/local/etc /dist/etc /dist/usr/share /dist/etc/frankenphp
+RUN cp /usr/local/bin/frankenphp /dist/usr/local/bin/frankenphp
+RUN cp -r /usr/local/lib/php /dist/usr/local/lib/php
+RUN cp -r /usr/local/etc/php /dist/usr/local/etc/php
+RUN cp -r /usr/share/zoneinfo /dist/usr/share/zoneinfo
+
+# Resolve shared libraries
+RUN EXT_DIR="$(php -r 'echo ini_get("extension_dir");')" && \
+    FRANKENPHP_BIN="/usr/local/bin/frankenphp" && \
+    for target in "$FRANKENPHP_BIN" $(find "$EXT_DIR" -maxdepth 2 -type f -name "*.so"); do \
+        libtree -pv "$target" | sed 's/.*── \(.*\) \[.*/\1/' | grep -v "^$target" | while IFS= read -r lib; do \
+            [ -z "$lib" ] && continue; \
+            cp -n "$lib" "/dist/usr/lib/" || true; \
+        done; \
+    done
+
+# Create user and group files for distroless
+RUN groupadd -g 101 humhub && \
+    useradd -u 100 -g humhub -d /app/public humhub && \
+    grep humhub /etc/passwd > /dist/etc/passwd && \
+    grep humhub /etc/group > /dist/etc/group
+
+FROM gcr.io/distroless/base-debian13:nonroot AS runner
+#FROM debian:13-slim AS runner
 
 ARG HUMHUB_VERSION
-ARG RUNTIME_DEPS
-LABEL name="HumHub" version=${HUMHUB_VERSION} variant="base" \
+ARG VCS_REF
+ARG BUILD_DATE
+
+LABEL name="HumHub" version=${HUMHUB_VERSION} variant="frankenphp" \
       org.label-schema.build-date=$BUILD_DATE \
       org.label-schema.name="HumHub" \
       org.label-schema.description="HumHub is a feature rich and highly flexible OpenSource Social Network Kit written in PHP" \
@@ -108,78 +124,30 @@ LABEL name="HumHub" version=${HUMHUB_VERSION} variant="base" \
       org.label-schema.version=${HUMHUB_VERSION} \
       org.label-schema.schema-version="1.0"
 
-RUN apk add --no-cache --update $RUNTIME_DEPS && \
-    apk add --no-cache --virtual temp_pkgs gettext && \
-    cp /usr/bin/envsubst /usr/local/bin/envsubst && \
-    apk del temp_pkgs && \
-    rm -rf /var/cache/apk/*
+# Copy bundled artifacts
+COPY --from=builder /dist /
 
-ENV PHP_POST_MAX_SIZE=16M
-ENV PHP_UPLOAD_MAX_FILESIZE=10M
-ENV PHP_MAX_EXECUTION_TIME=60
-ENV PHP_MEMORY_LIMIT=1G
-ENV PHP_TIMEZONE=UTC
+# Copy HumHub
+COPY --from=builder --chown=100:101 /usr/src/humhub /app/public
 
-RUN touch /var/run/supervisor.sock && \
-    chmod 777 /var/run/supervisor.sock
+COPY --chown=100:101 base/ /
 
-# 100=nginx 101=nginx (group)
-COPY --from=builder --chown=100:101 /usr/src/humhub /var/www/localhost/htdocs/
-COPY --chown=100:101 humhub/ /var/www/localhost/htdocs/
+# Set Library Path
+ENV LD_LIBRARY_PATH=/usr/lib
 
-RUN mkdir -p /usr/src/humhub/protected/config/ && \
-    cp -R /var/www/localhost/htdocs/protected/config/* /usr/src/humhub/protected/config/ && \
-    rm -f var/www/localhost/htdocs/protected/config/common.php /usr/src/humhub/protected/config/common.php && \
-    echo "v${HUMHUB_VERSION}" >  /usr/src/humhub/.version
+# Run as non-root user
+USER humhub
 
-COPY base/ /
-COPY docker-entrypoint.sh /docker-entrypoint.sh
+VOLUME /app/public/uploads
+VOLUME /app/public/protected/config
+VOLUME /app/public/protected/modules
 
-RUN chmod 600 /etc/crontabs/nginx && \
-    chmod +x /docker-entrypoint.sh
+WORKDIR /app/public
 
-VOLUME /var/www/localhost/htdocs/uploads
-VOLUME /var/www/localhost/htdocs/protected/config
-VOLUME /var/www/localhost/htdocs/protected/modules
+EXPOSE 8080
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["supervisord", "-n", "-c", "/etc/supervisord.conf"]
+# Point directly to PHP execution of entrypoint.php
+ENTRYPOINT ["/usr/local/bin/frankenphp", "php-cli", "/app/entrypoint.php"]
 
-FROM base AS humhub_phponly
-
-LABEL variant="phponly"
-
-RUN apk add --no-cache fcgi
-
-COPY phponly/ /
-
-ADD https://raw.githubusercontent.com/renatomefi/php-fpm-healthcheck/master/php-fpm-healthcheck /usr/local/bin/php-fpm-healthcheck
-RUN chmod +x /usr/local/bin/php-fpm-healthcheck \
- && addgroup -g 101 -S nginx \
- && adduser --uid 100 -g 101 -S nginx
-
-EXPOSE 9000
-
-FROM docker.io/library/nginx:1.31.2-alpine AS humhub_nginx
-
-LABEL variant="nginx"
-
-ENV NGINX_CLIENT_MAX_BODY_SIZE=10m \
-    NGINX_KEEPALIVE_TIMEOUT=65 \
-    NGINX_UPSTREAM=humhub:9000
-
-RUN rm -rf /etc/nginx/conf.d/*
-COPY nginx/ /
-COPY --from=builder --chown=nginx:nginx /usr/src/humhub/ /var/www/localhost/htdocs/
-
-FROM base AS humhub_allinone
-
-LABEL variant="allinone"
-
-RUN apk add --no-cache nginx && \
-    chown -R nginx:nginx /var/lib/nginx/
-
-RUN rm -rf /etc/nginx/conf.d/*
-COPY nginx/ /
-
-EXPOSE 80
+# Command args passed to pcntl_exec / entrypoint.php
+CMD ["/usr/local/bin/frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"]
